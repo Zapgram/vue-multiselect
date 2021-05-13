@@ -336,6 +336,10 @@ export default {
         ? Array.isArray(this.value) ? this.value : [this.value]
         : []
     },
+    /**
+     * @returns {Array} options that match the inputted search filter.
+     * Objects in array: {isTag: bool, label: string}
+     */
     filteredOptions () {
       const search = this.search || ''
       const normalizedSearch = search.toLowerCase().trim()
@@ -495,14 +499,17 @@ export default {
      * If option is already selected -> remove it from the results.
      *
      * @param  {Object||String||Integer} option to select/deselect
-     * @param  {Boolean} block removing
+     * @param  {String} key key that was pressed to select
      */
     select (option, key) {
+      // Exit early for any conditions that should not result in selection
       /* istanbul ignore else */
       if (option.$isLabel && this.groupSelect) {
+        // Have selectGroup handle the selection in this case. No work needed from select.
         this.selectGroup(option)
         return
       }
+      // Do not select if key is customized as blocked from default selection behavior, or if disabled/ static label.
       if (this.blockKeys.indexOf(key) !== -1 ||
         this.disabled ||
         option.$isDisabled ||
@@ -511,7 +518,10 @@ export default {
       /* istanbul ignore else */
       if (this.max && this.multiple && this.internalValue.length === this.max) return
       /* istanbul ignore else */
+      // Tab should not select, unless the user had provided input (pointerDirty=true).
       if (key === 'Tab' && !this.pointerDirty) return
+
+      // Otherwise, we do want selection.
       if (option.isTag) {
         this.$emit('tag', option.label, this.id)
         this.search = ''
@@ -520,6 +530,8 @@ export default {
         const isSelected = this.isSelected(option)
 
         if (isSelected) {
+          // Toggle option to unselected by removing it from selected options.
+          // Disable this behavior on tab because tabbing should not control deselection.
           if (key !== 'Tab') this.removeElement(option)
           return
         }
@@ -540,7 +552,7 @@ export default {
     },
     /**
      * Add the given group options to the list of selected options
-     * If all group optiona are already selected -> remove it from the results.
+     * If all group options are already selected -> remove it from the results.
      *
      * @param  {Object||String||Integer} group to select/deselect
      */
