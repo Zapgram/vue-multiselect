@@ -1,9 +1,11 @@
-import deepClone from './utils'
-
 function isEmpty (opt) {
   if (opt === 0) return false
   if (Array.isArray(opt) && opt.length === 0) return true
   return !opt
+}
+
+function not (fun) {
+  return (...params) => !fun(...params)
 }
 
 function includes (str, query) {
@@ -64,11 +66,8 @@ export default {
     return {
       search: '',
       isOpen: false,
-      prefferedOpenDirection: 'below',
-      optimizedHeight: this.maxHeight,
-      internalValue: this.value || this.value === 0
-        ? deepClone(Array.isArray(this.value) ? this.value : [this.value])
-        : []
+      preferredOpenDirection: 'below',
+      optimizedHeight: this.maxHeight
     }
   },
   props: {
@@ -136,7 +135,7 @@ export default {
       default: true
     },
     /**
-     * Clear the search input after select()
+     * Clear the search input after `)
      * @default true
      * @type {Boolean}
      */
@@ -278,6 +277,16 @@ export default {
       type: String
     },
     /**
+     * Allow to select all group values
+     * by selecting the group label
+     * @default false
+     * @type {Boolean}
+     */
+    groupSelect: {
+      type: Boolean,
+      default: false
+    },
+    /**
      * Array of keyboard keys to block
      * when selecting
      * @default 1000
@@ -289,21 +298,44 @@ export default {
         return []
       }
     },
+    /**
+     * Prevent from wiping up the search value
+     * @default false
+     * @type {Boolean}
+    */
     preserveSearch: {
+      type: Boolean,
+      default: false
+    },
+    /**
+     * Select 1st options if value is empty
+     * @default false
+     * @type {Boolean}
+    */
+    preselectFirst: {
       type: Boolean,
       default: false
     }
   },
   mounted () {
     /* istanbul ignore else */
-    if (!this.multiple && !this.clearOnSelect) {
-      console.warn('[Vue-Multiselect warn]: ClearOnSelect and Multiple props can’t be both set to false.')
-    }
     if (!this.multiple && this.max) {
       console.warn('[Vue-Multiselect warn]: Max prop should not be used when prop Multiple equals false.')
     }
+    if (
+      this.preselectFirst &&
+      !this.internalValue.length &&
+      this.options.length
+    ) {
+      this.select(this.filteredOptions[0])
+    }
   },
   computed: {
+    internalValue () {
+      return this.value || this.value === 0
+        ? Array.isArray(this.value) ? this.value : [this.value]
+        : []
+    },
     filteredOptions () {
       const search = this.search || ''
       const normalizedSearch = search.toLowerCase().trim()
@@ -320,7 +352,7 @@ export default {
       }
 
       options = this.hideSelected
-        ? options.filter(this.isNotSelected)
+        ? options.filter(not(this.isSelected))
         : options
 
       /* istanbul ignore else */
@@ -354,42 +386,28 @@ export default {
     }
   },
   watch: {
-    internalValue (newVal, oldVal) {
+    internalValue () {
       /* istanbul ignore else */
       if (this.resetAfter && this.internalValue.length) {
         this.search = ''
-        this.internalValue = []
+        this.$emit('input', this.multiple ? [] : null)
       }
     },
     search () {
       this.$emit('search-change', this.search, this.id)
-    },
-    value (value) {
-      this.internalValue = this.getInternalValue(value)
     }
   },
   methods: {
     /**
-     * Converts the internal value to the external value
-     * @returns {Object||Array||String||Integer} returns the external value
+     * Returns the internalValue in a way it can be emited to the parent
+     * @returns {Object||Array||String||Integer}
      */
     getValue () {
       return this.multiple
-        ? deepClone(this.internalValue)
+        ? this.internalValue
         : this.internalValue.length === 0
           ? null
-          : deepClone(this.internalValue[0])
-    },
-    /**
-     * Converts the external value to the internal value
-     * @returns {Array} returns the internal value
-     */
-    getInternalValue (value) {
-      return value === null || value === undefined
-        ? []
-        : this.multiple
-          ? deepClone(value)
-          : deepClone([value])
+          : this.internalValue[0]
     },
     /**
      * Filters and then flattens the options list
@@ -444,13 +462,12 @@ export default {
       return this.valueKeys.indexOf(opt) > -1
     },
     /**
-     * Finds out if the given element is NOT already present
-     * in the result value. Negated isSelected method.
+     * Finds out if the given option is disabled
      * @param  {Object||String||Integer} option passed element to check
-     * @returns {Boolean} returns true if element is not selected
+     * @returns {Boolean} returns true if element is disabled
      */
-    isNotSelected (option) {
-      return !this.isSelected(option)
+    isOptionDisabled (option) {
+      return !!option.$isDisabled
     },
     /**
      * Returns empty string when options is null/undefined
@@ -461,7 +478,6 @@ export default {
      * @returns {Object||String}
      */
     getOptionLabel (option) {
-      /* istanbul ignore else */
       if (isEmpty(option)) return ''
       /* istanbul ignore else */
       if (option.isTag) return option.label
@@ -483,7 +499,15 @@ export default {
      */
     select (option, key) {
       /* istanbul ignore else */
-      if (this.blockKeys.indexOf(key) !== -1 || this.disabled || option.$isLabel || option.$isDisabled) return
+      if (option.$isLabel && this.groupSelect) {
+        this.selectGroup(option)
+        return
+      }
+      if (this.blockKeys.indexOf(key) !== -1 ||
+        this.disabled ||
+        option.$isDisabled ||
+        option.$isLabel
+      ) return
       /* istanbul ignore else */
       if (this.max && this.multiple && this.internalValue.length === this.max) return
       /* istanbul ignore else */
@@ -494,22 +518,78 @@ export default {
         if (this.closeOnSelect && !this.multiple) this.deactivate()
       } else {
         const isSelected = this.isSelected(option)
+
         if (isSelected) {
           if (key !== 'Tab') this.removeElement(option)
           return
-        } else if (this.multiple) {
-          this.internalValue.push(option)
-        } else {
-          this.internalValue = [option]
         }
-        this.$emit('select', deepClone(option), this.id)
-        this.$emit('input', this.getValue(), this.id)
+
+        this.$emit('select', option, this.id)
+
+        if (this.multiple) {
+          this.$emit('input', this.internalValue.concat([option]), this.id)
+        } else {
+          this.$emit('input', option, this.id)
+        }
 
         /* istanbul ignore else */
         if (this.clearOnSelect) this.search = ''
       }
       /* istanbul ignore else */
       if (this.closeOnSelect) this.deactivate()
+    },
+    /**
+     * Add the given group options to the list of selected options
+     * If all group optiona are already selected -> remove it from the results.
+     *
+     * @param  {Object||String||Integer} group to select/deselect
+     */
+    selectGroup (selectedGroup) {
+      const group = this.options.find(option => {
+        return option[this.groupLabel] === selectedGroup.$groupLabel
+      })
+
+      if (!group) return
+
+      if (this.wholeGroupSelected(group)) {
+        this.$emit('remove', group[this.groupValues], this.id)
+
+        const newValue = this.internalValue.filter(
+          option => group[this.groupValues].indexOf(option) === -1
+        )
+
+        this.$emit('input', newValue, this.id)
+      } else {
+        const optionsToAdd = group[this.groupValues].filter(
+          option => !(this.isOptionDisabled(option) || this.isSelected(option))
+        )
+
+        this.$emit('select', optionsToAdd, this.id)
+        this.$emit(
+          'input',
+          this.internalValue.concat(optionsToAdd),
+          this.id
+        )
+      }
+
+      if (this.closeOnSelect) this.deactivate()
+    },
+    /**
+     * Helper to identify if all values in a group are selected
+     *
+     * @param {Object} group to validated selected values against
+     */
+    wholeGroupSelected (group) {
+      return group[this.groupValues].every(option => this.isSelected(option) || this.isOptionDisabled(option)
+      )
+    },
+    /**
+     * Helper to identify if all values in a group are disabled
+     *
+     * @param {Object} group to check for disabled values
+     */
+    wholeGroupDisabled (group) {
+      return group[this.groupValues].every(this.isOptionDisabled)
     },
     /**
      * Removes the given option from the selected options.
@@ -523,6 +603,8 @@ export default {
       /* istanbul ignore else */
       if (this.disabled) return
       /* istanbul ignore else */
+      if (option.$isDisabled) return
+      /* istanbul ignore else */
       if (!this.allowEmpty && this.internalValue.length <= 1) {
         this.deactivate()
         return
@@ -532,9 +614,13 @@ export default {
         ? this.valueKeys.indexOf(option[this.trackBy])
         : this.valueKeys.indexOf(option)
 
-      this.internalValue.splice(index, 1)
-      this.$emit('input', this.getValue(), this.id)
-      this.$emit('remove', deepClone(option), this.id)
+      this.$emit('remove', option, this.id)
+      if (this.multiple) {
+        const newValue = this.internalValue.slice(0, index).concat(this.internalValue.slice(index + 1))
+        this.$emit('input', newValue, this.id)
+      } else {
+        this.$emit('input', null, this.id)
+      }
 
       /* istanbul ignore else */
       if (this.closeOnSelect && shouldClose) this.deactivate()
@@ -549,7 +635,7 @@ export default {
       /* istanbul ignore else */
       if (this.blockKeys.indexOf('Delete') !== -1) return
       /* istanbul ignore else */
-      if (this.search.length === 0 && Array.isArray(this.internalValue)) {
+      if (this.search.length === 0 && Array.isArray(this.internalValue) && this.internalValue.length) {
         this.removeElement(this.internalValue[this.internalValue.length - 1], false)
       }
     },
@@ -571,7 +657,7 @@ export default {
       /* istanbul ignore else  */
       if (this.searchable) {
         if (!this.preserveSearch) this.search = ''
-        this.$nextTick(() => this.$refs.search.focus())
+        this.$nextTick(() => this.$refs.search && this.$refs.search.focus())
       } else {
         this.$el.focus()
       }
@@ -588,7 +674,7 @@ export default {
       this.isOpen = false
       /* istanbul ignore else  */
       if (this.searchable) {
-        this.$refs.search.blur()
+        this.$refs.search && this.$refs.search.blur()
       } else {
         this.$el.blur()
       }
@@ -619,10 +705,10 @@ export default {
       const hasEnoughSpaceBelow = spaceBelow > this.maxHeight
 
       if (hasEnoughSpaceBelow || spaceBelow > spaceAbove || this.openDirection === 'below' || this.openDirection === 'bottom') {
-        this.prefferedOpenDirection = 'below'
+        this.preferredOpenDirection = 'below'
         this.optimizedHeight = Math.min(spaceBelow - 40, this.maxHeight)
       } else {
-        this.prefferedOpenDirection = 'above'
+        this.preferredOpenDirection = 'above'
         this.optimizedHeight = Math.min(spaceAbove - 40, this.maxHeight)
       }
     }

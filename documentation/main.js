@@ -3,6 +3,7 @@ import * as examples from './partials/examples'
 import LangSwitcher from './LangSwitcher'
 import MultiselectExample from './MultiselectExample'
 import Multiselect from 'vue-multiselect'
+require('es6-promise').polyfill()
 
 import './docs.scss'
 
@@ -55,7 +56,7 @@ new Vue({
           window.location.assign('v1/index.html')
           break
         case 'v2.0':
-          window.location.assign('https://monterail.github.io/vue-multiselect/')
+          window.location.assign('https://vue-multiselect.js.org/')
           break
       }
     },

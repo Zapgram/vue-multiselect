@@ -6,40 +6,55 @@
     @blur="searchable ? false : deactivate()"
     @keydown.self.down.prevent="pointerForward()"
     @keydown.self.up.prevent="pointerBackward()"
-    @keydown.enter.tab.stop.self="addPointerElement($event)"
+    @keypress.enter.tab.stop.self="addPointerElement($event)"
     @keyup.esc="deactivate()"
-    class="multiselect">
+    class="multiselect"
+    role="combobox"
+    :aria-owns="'listbox-'+id">
       <slot name="caret" :toggle="toggle">
         <div @mousedown.prevent.stop="toggle()" class="multiselect__select"></div>
       </slot>
       <slot name="clear" :search="search"></slot>
       <div ref="tags" class="multiselect__tags">
-        <div class="multiselect__tags-wrap" v-show="visibleValue.length > 0">
-          <template v-for="option of visibleValue" @mousedown.prevent>
-            <slot name="tag" :option="option" :search="search" :remove="removeElement">
-              <span class="multiselect__tag">
-                <span v-text="getOptionLabel(option)"></span>
-                <i aria-hidden="true" tabindex="1" @keydown.enter.prevent="removeElement(option)"  @mousedown.prevent="removeElement(option)" class="multiselect__tag-icon"></i>
-              </span>
+        <slot
+          name="selection"
+          :search="search"
+          :remove="removeElement"
+          :values="visibleValues"
+          :is-open="isOpen"
+        >
+          <div class="multiselect__tags-wrap" v-show="visibleValues.length > 0">
+            <template v-for="(option, index) of visibleValues" @mousedown.prevent>
+              <slot name="tag" :option="option" :search="search" :remove="removeElement">
+                <span class="multiselect__tag" :key="index">
+                  <span v-text="getOptionLabel(option)"></span>
+                  <i tabindex="1" @keypress.enter.prevent="removeElement(option)"  @mousedown.prevent="removeElement(option)" class="multiselect__tag-icon"></i>
+                </span>
+              </slot>
+            </template>
+          </div>
+          <template v-if="internalValue && internalValue.length > limit">
+            <slot name="limit">
+              <strong class="multiselect__strong" v-text="limitText(internalValue.length - limit)"/>
             </slot>
           </template>
-        </div>
-        <template v-if="internalValue && internalValue.length > limit">
-          <strong class="multiselect__strong" v-text="limitText(internalValue.length - limit)"></strong>
-        </template>
+        </slot>
         <transition name="multiselect__loading">
-          <slot name="loading"><div v-show="loading" class="multiselect__spinner"></div></slot>
+          <slot name="loading">
+            <div v-show="loading" class="multiselect__spinner"/>
+          </slot>
         </transition>
         <input
           ref="search"
+          v-if="searchable"
           :name="name"
           :id="id"
           type="text"
           autocomplete="off"
+          spellcheck="false"
           :placeholder="placeholder"
-          v-if="searchable"
           :style="inputStyle"
-          :value="isOpen ? search : currentOptionLabel"
+          :value="search"
           :disabled="disabled"
           :tabindex="tabindex"
           @input="updateSearch($event.target.value)"
@@ -48,15 +63,29 @@
           @keyup.esc="deactivate()"
           @keydown.down.prevent="pointerForward()"
           @keydown.up.prevent="pointerBackward()"
-          @keydown.enter.prevent.stop.self="addPointerElement($event)"
+          @keypress.enter.prevent.stop.self="addPointerElement($event)"
           @keydown.tab.stop.self="addPointerElement($event)"
           @keydown.delete.stop="removeLastElement()"
-          class="multiselect__input"/>
+          class="multiselect__input"
+          :aria-controls="'listbox-'+id"
+        />
         <span
-          v-if="!searchable"
+          v-if="isSingleLabelVisible"
           class="multiselect__single"
           @mousedown.prevent="toggle"
-          v-text="currentOptionLabel">
+        >
+          <slot name="singleLabel" :option="singleValue">
+            <template>{{ currentOptionLabel }}</template>
+          </slot>
+        </span>
+        <span
+          v-if="isPlaceholderVisible"
+          class="multiselect__placeholder"
+          @mousedown.prevent="toggle"
+        >
+          <slot name="placeholder">
+            {{ placeholder }}
+          </slot>
         </span>
       </div>
       <transition name="multiselect">
@@ -64,10 +93,12 @@
           class="multiselect__content-wrapper"
           v-show="isOpen"
           @focus="activate"
+          tabindex="-1"
           @mousedown.prevent
           :style="{ maxHeight: optimizedHeight + 'px' }"
-          ref="list">
-          <ul class="multiselect__content" :style="contentStyle">
+          ref="list"
+        >
+          <ul class="multiselect__content" :style="contentStyle" role="listbox" :id="'listbox-'+id">
             <slot name="beforeList"></slot>
             <li v-if="multiple && max === internalValue.length">
               <span class="multiselect__option">
@@ -75,7 +106,11 @@
               </span>
             </li>
             <template v-if="!max || internalValue.length < max">
-              <li class="multiselect__element" v-for="(option, index) of filteredOptions" :key="index">
+              <li class="multiselect__element"
+                v-for="(option, index) of filteredOptions"
+                :key="index"
+                v-bind:id="id + '-' + index"
+                v-bind:role="!(option && (option.$isLabel || option.$isDisabled)) ? 'option' : null">
                 <span
                   v-if="!(option && (option.$isLabel || option.$isDisabled))"
                   :class="optionHighlight(index, option)"
@@ -85,15 +120,19 @@
                   :data-selected="selectedLabelText"
                   :data-deselect="deselectLabelText"
                   class="multiselect__option">
-                    <slot name="option" :option="option" :search="search">
+                    <slot name="option" :option="option" :search="search" :index="index">
                       <span>{{ getOptionLabel(option) }}</span>
                     </slot>
                 </span>
                 <span
                   v-if="option && (option.$isLabel || option.$isDisabled)"
-                  :class="optionHighlight(index, option)"
-                  class="multiselect__option multiselect__option--disabled">
-                    <slot name="option" :option="option" :search="search">
+                  :data-select="groupSelect && selectGroupLabelText"
+                  :data-deselect="groupSelect && deselectGroupLabelText"
+                  :class="groupHighlight(index, option)"
+                  @mouseenter.self="groupSelect && pointerSet(index)"
+                  @mousedown.prevent="selectGroup(option)"
+                  class="multiselect__option">
+                    <slot name="option" :option="option" :search="search" :index="index">
                       <span>{{ getOptionLabel(option) }}</span>
                     </slot>
                 </span>
@@ -101,7 +140,12 @@
             </template>
             <li v-show="showNoResults && (filteredOptions.length === 0 && search && !loading)">
               <span class="multiselect__option">
-                <slot name="noResult">No elements found. Consider changing the search query.</slot>
+                <slot name="noResult" :search="search">No elements found. Consider changing the search query.</slot>
+              </span>
+            </li>
+            <li v-show="showNoOptions && (options.length === 0 && !search && !loading)">
+              <span class="multiselect__option">
+                <slot name="noOptions">List is empty.</slot>
               </span>
             </li>
             <slot name="afterList"></slot>
@@ -112,167 +156,222 @@
 </template>
 
 <script>
-  import multiselectMixin from './multiselectMixin'
-  import pointerMixin from './pointerMixin'
+import multiselectMixin from './multiselectMixin'
+import pointerMixin from './pointerMixin'
 
-  export default {
-    name: 'vue-multiselect',
-    mixins: [multiselectMixin, pointerMixin],
-    props: {
-
-      /**
-       * name attribute to match optional label element
-       * @default ''
-       * @type {String}
-       */
-      name: {
-        type: String,
-        default: ''
-      },
-      /**
-       * String to show when pointing to an option
-       * @default 'Press enter to select'
-       * @type {String}
-       */
-      selectLabel: {
-        type: String,
-        default: 'Press enter to select'
-      },
-      /**
-       * String to show next to selected option
-       * @default 'Selected'
-       * @type {String}
-      */
-      selectedLabel: {
-        type: String,
-        default: 'Selected'
-      },
-      /**
-       * String to show when pointing to an alredy selected option
-       * @default 'Press enter to remove'
-       * @type {String}
-      */
-      deselectLabel: {
-        type: String,
-        default: 'Press enter to remove'
-      },
-      /**
-       * Decide whether to show pointer labels
-       * @default true
-       * @type {Boolean}
-      */
-      showLabels: {
-        type: Boolean,
-        default: true
-      },
-      /**
-       * Limit the display of selected options. The rest will be hidden within the limitText string.
-       * @default 99999
-       * @type {Integer}
-       */
-      limit: {
-        type: Number,
-        default: 99999
-      },
-      /**
-       * Sets maxHeight style value of the dropdown
-       * @default 300
-       * @type {Integer}
-       */
-      maxHeight: {
-        type: Number,
-        default: 300
-      },
-      /**
-       * Function that process the message shown when selected
-       * elements pass the defined limit.
-       * @default 'and * more'
-       * @param {Int} count Number of elements more than limit
-       * @type {Function}
-       */
-      limitText: {
-        type: Function,
-        default: count => `and ${count} more`
-      },
-      /**
-       * Set true to trigger the loading spinner.
-       * @default False
-       * @type {Boolean}
-      */
-      loading: {
-        type: Boolean,
-        default: false
-      },
-      /**
-       * Disables the multiselect if true.
-       * @default false
-       * @type {Boolean}
-      */
-      disabled: {
-        type: Boolean,
-        default: false
-      },
-      /**
-       * Fixed opening direction
-       * @default ''
-       * @type {String}
-      */
-      openDirection: {
-        type: String,
-        default: ''
-      },
-      showNoResults: {
-        type: Boolean,
-        default: true
-      },
-      tabindex: {
-        type: Number,
-        default: 0
+export default {
+  name: 'vue-multiselect',
+  mixins: [multiselectMixin, pointerMixin],
+  props: {
+    /**
+     * name attribute to match optional label element
+     * @default ''
+     * @type {String}
+     */
+    name: {
+      type: String,
+      default: ''
+    },
+    /**
+     * String to show when pointing to an option
+     * @default 'Press enter to select'
+     * @type {String}
+     */
+    selectLabel: {
+      type: String,
+      default: 'Press enter to select'
+    },
+    /**
+     * String to show when pointing to an option
+     * @default 'Press enter to select'
+     * @type {String}
+     */
+    selectGroupLabel: {
+      type: String,
+      default: 'Press enter to select group'
+    },
+    /**
+     * String to show next to selected option
+     * @default 'Selected'
+     * @type {String}
+     */
+    selectedLabel: {
+      type: String,
+      default: 'Selected'
+    },
+    /**
+     * String to show when pointing to an already selected option
+     * @default 'Press enter to remove'
+     * @type {String}
+     */
+    deselectLabel: {
+      type: String,
+      default: 'Press enter to remove'
+    },
+    /**
+     * String to show when pointing to an already selected option
+     * @default 'Press enter to remove'
+     * @type {String}
+     */
+    deselectGroupLabel: {
+      type: String,
+      default: 'Press enter to deselect group'
+    },
+    /**
+     * Decide whether to show pointer labels
+     * @default true
+     * @type {Boolean}
+     */
+    showLabels: {
+      type: Boolean,
+      default: true
+    },
+    /**
+     * Limit the display of selected options. The rest will be hidden within the limitText string.
+     * @default 99999
+     * @type {Integer}
+     */
+    limit: {
+      type: Number,
+      default: 99999
+    },
+    /**
+     * Sets maxHeight style value of the dropdown
+     * @default 300
+     * @type {Integer}
+     */
+    maxHeight: {
+      type: Number,
+      default: 300
+    },
+    /**
+     * Function that process the message shown when selected
+     * elements pass the defined limit.
+     * @default 'and * more'
+     * @param {Int} count Number of elements more than limit
+     * @type {Function}
+     */
+    limitText: {
+      type: Function,
+      default: count => `and ${count} more`
+    },
+    /**
+     * Set true to trigger the loading spinner.
+     * @default False
+     * @type {Boolean}
+     */
+    loading: {
+      type: Boolean,
+      default: false
+    },
+    /**
+     * Disables the multiselect if true.
+     * @default false
+     * @type {Boolean}
+     */
+    disabled: {
+      type: Boolean,
+      default: false
+    },
+    /**
+     * Fixed opening direction
+     * @default ''
+     * @type {String}
+     */
+    openDirection: {
+      type: String,
+      default: ''
+    },
+    /**
+     * Shows slot with message about empty options
+     * @default true
+     * @type {Boolean}
+     */
+    showNoOptions: {
+      type: Boolean,
+      default: true
+    },
+    showNoResults: {
+      type: Boolean,
+      default: true
+    },
+    tabindex: {
+      type: Number,
+      default: 0
+    }
+  },
+  computed: {
+    isSingleLabelVisible () {
+      return (
+        (this.singleValue || this.singleValue === 0) &&
+        (!this.isOpen || !this.searchable) &&
+        !this.visibleValues.length
+      )
+    },
+    isPlaceholderVisible () {
+      return !this.internalValue.length && (!this.searchable || !this.isOpen)
+    },
+    visibleValues () {
+      return this.multiple ? this.internalValue.slice(0, this.limit) : []
+    },
+    singleValue () {
+      return this.internalValue[0]
+    },
+    deselectLabelText () {
+      return this.showLabels ? this.deselectLabel : ''
+    },
+    deselectGroupLabelText () {
+      return this.showLabels ? this.deselectGroupLabel : ''
+    },
+    selectLabelText () {
+      return this.showLabels ? this.selectLabel : ''
+    },
+    selectGroupLabelText () {
+      return this.showLabels ? this.selectGroupLabel : ''
+    },
+    selectedLabelText () {
+      return this.showLabels ? this.selectedLabel : ''
+    },
+    inputStyle () {
+      if (
+        this.searchable ||
+        (this.multiple && this.value && this.value.length)
+      ) {
+        // Hide input by setting the width to 0 allowing it to receive focus
+        return this.isOpen
+          ? { width: '100%' }
+          : { width: '0', position: 'absolute', padding: '0' }
+      }
+      return ''
+    },
+    contentStyle () {
+      return this.options.length
+        ? { display: 'inline-block' }
+        : { display: 'block' }
+    },
+    isAbove () {
+      if (this.openDirection === 'above' || this.openDirection === 'top') {
+        return true
+      } else if (
+        this.openDirection === 'below' ||
+        this.openDirection === 'bottom'
+      ) {
+        return false
+      } else {
+        return this.preferredOpenDirection === 'above'
       }
     },
-    computed: {
-      visibleValue () {
-        return this.multiple
-          ? this.internalValue.slice(0, this.limit)
-          : []
-      },
-      deselectLabelText () {
-        return this.showLabels
-          ? this.deselectLabel
-          : ''
-      },
-      selectLabelText () {
-        return this.showLabels
-          ? this.selectLabel
-          : ''
-      },
-      selectedLabelText () {
-        return this.showLabels
-          ? this.selectedLabel
-          : ''
-      },
-      inputStyle () {
-        if (this.multiple && this.value && this.value.length) {
-          // Hide input by setting the width to 0 allowing it to receive focus
-          return this.isOpen ? { 'width': 'auto' } : { 'width': '0', 'position': 'absolute' }
-        }
-      },
-      contentStyle () {
-        return this.options.length
-          ? { 'display': 'inline-block' }
-          : { 'display': 'block' }
-      },
-      isAbove () {
-        if (this.openDirection === 'above' || this.openDirection === 'top') {
-          return true
-        } else if (this.openDirection === 'below' || this.openDirection === 'bottom') {
-          return false
-        } else {
-          return this.prefferedOpenDirection === 'above'
-        }
-      }
+    showSearchInput () {
+      return (
+        this.searchable &&
+        (this.hasSingleSelectedSlot &&
+        (this.visibleSingleValue || this.visibleSingleValue === 0)
+          ? this.isOpen
+          : true)
+      )
     }
   }
+}
 </script>
 
 <style>
@@ -300,7 +399,7 @@ fieldset[disabled] .multiselect {
   width: 16px;
   height: 16px;
   border-radius: 100%;
-  border-color: #41B883 transparent transparent;
+  border-color: #41b883 transparent transparent;
   border-style: solid;
   border-width: 2px;
   box-shadow: 0 0 0 1px transparent;
@@ -331,7 +430,7 @@ fieldset[disabled] .multiselect {
 .multiselect__input,
 .multiselect__single {
   font-family: inherit;
-  font-size: 14px;
+  font-size: 16px;
   touch-action: manipulation;
 }
 
@@ -342,7 +441,7 @@ fieldset[disabled] .multiselect {
   width: 100%;
   min-height: 40px;
   text-align: left;
-  color: #35495E;
+  color: #35495e;
 }
 
 .multiselect * {
@@ -354,6 +453,7 @@ fieldset[disabled] .multiselect {
 }
 
 .multiselect--disabled {
+  background: #ededed;
   pointer-events: none;
   opacity: 0.6;
 }
@@ -397,6 +497,10 @@ fieldset[disabled] .multiselect {
   vertical-align: top;
 }
 
+.multiselect__input::placeholder {
+  color: #35495e;
+}
+
 .multiselect__tag ~ .multiselect__input,
 .multiselect__tag ~ .multiselect__single {
   width: auto;
@@ -414,12 +518,12 @@ fieldset[disabled] .multiselect {
 }
 
 .multiselect__single {
-  padding-left: 6px;
+  padding-left: 5px;
   margin-bottom: 8px;
 }
 
 .multiselect__tags-wrap {
-  display: inline
+  display: inline;
 }
 
 .multiselect__tags {
@@ -427,8 +531,9 @@ fieldset[disabled] .multiselect {
   display: block;
   padding: 8px 40px 0 8px;
   border-radius: 5px;
-  border: 1px solid #E8E8E8;
+  border: 1px solid #e8e8e8;
   background: #fff;
+  font-size: 14px;
 }
 
 .multiselect__tag {
@@ -439,7 +544,7 @@ fieldset[disabled] .multiselect {
   margin-right: 10px;
   color: #fff;
   line-height: 1;
-  background: #41B883;
+  background: #41b883;
   margin-bottom: 5px;
   white-space: nowrap;
   overflow: hidden;
@@ -491,7 +596,7 @@ fieldset[disabled] .multiselect {
   margin: 0;
   text-decoration: none;
   border-radius: 5px;
-  border: 1px solid #E8E8E8;
+  border: 1px solid #e8e8e8;
   cursor: pointer;
 }
 
@@ -525,7 +630,7 @@ fieldset[disabled] .multiselect {
 }
 
 .multiselect__placeholder {
-  color: #ADADAD;
+  color: #adadad;
   display: inline-block;
   margin-bottom: 10px;
   padding-top: 2px;
@@ -542,7 +647,7 @@ fieldset[disabled] .multiselect {
   width: 100%;
   max-height: 240px;
   overflow: auto;
-  border: 1px solid #E8E8E8;
+  border: 1px solid #e8e8e8;
   border-top: none;
   border-bottom-left-radius: 5px;
   border-bottom-right-radius: 5px;
@@ -566,7 +671,7 @@ fieldset[disabled] .multiselect {
   border-top-left-radius: 5px;
   border-top-right-radius: 5px;
   border-bottom: none;
-  border-top: 1px solid #E8E8E8;
+  border-top: 1px solid #e8e8e8;
 }
 
 .multiselect__content::webkit-scrollbar {
@@ -597,23 +702,24 @@ fieldset[disabled] .multiselect {
   line-height: 40px;
   padding-right: 12px;
   padding-left: 20px;
+  font-size: 13px;
 }
 
 .multiselect__option--highlight {
-  background: #41B883;
+  background: #41b883;
   outline: none;
   color: white;
 }
 
 .multiselect__option--highlight:after {
   content: attr(data-select);
-  background: #41B883;
+  background: #41b883;
   color: white;
 }
 
 .multiselect__option--selected {
-  background: #F3F3F3;
-  color: #35495E;
+  background: #f3f3f3;
+  color: #35495e;
   font-weight: bold;
 }
 
@@ -623,19 +729,14 @@ fieldset[disabled] .multiselect {
 }
 
 .multiselect__option--selected.multiselect__option--highlight {
-  background: #FF6A6A;
+  background: #ff6a6a;
   color: #fff;
 }
 
 .multiselect__option--selected.multiselect__option--highlight:after {
-  background: #FF6A6A;
+  background: #ff6a6a;
   content: attr(data-deselect);
   color: #fff;
-}
-
-.multiselect--disabled {
-  background: #ededed;
-  pointer-events: none;
 }
 
 .multiselect--disabled .multiselect__current,
@@ -645,14 +746,39 @@ fieldset[disabled] .multiselect {
 }
 
 .multiselect__option--disabled {
-  background: #ededed;
-  color: #a6a6a6;
+  background: #ededed !important;
+  color: #a6a6a6 !important;
   cursor: text;
   pointer-events: none;
 }
 
+.multiselect__option--group {
+  background: #ededed;
+  color: #35495e;
+}
+
+.multiselect__option--group.multiselect__option--highlight {
+  background: #35495e;
+  color: #fff;
+}
+
+.multiselect__option--group.multiselect__option--highlight:after {
+  background: #35495e;
+}
+
 .multiselect__option--disabled.multiselect__option--highlight {
-  background: #dedede !important;
+  background: #dedede;
+}
+
+.multiselect__option--group-selected.multiselect__option--highlight {
+  background: #ff6a6a;
+  color: #fff;
+}
+
+.multiselect__option--group-selected.multiselect__option--highlight:after {
+  background: #ff6a6a;
+  content: attr(data-deselect);
+  color: #fff;
 }
 
 .multiselect-enter-active,
@@ -673,39 +799,43 @@ fieldset[disabled] .multiselect {
 }
 
 *[dir="rtl"] .multiselect {
-    text-align: right;
+  text-align: right;
 }
 
 *[dir="rtl"] .multiselect__select {
-    right: auto;
-    left: 1px;
+  right: auto;
+  left: 1px;
 }
 
 *[dir="rtl"] .multiselect__tags {
-    padding: 8px 8px 0px 40px;
+  padding: 8px 8px 0px 40px;
 }
 
 *[dir="rtl"] .multiselect__content {
-    text-align: right;
+  text-align: right;
 }
 
 *[dir="rtl"] .multiselect__option:after {
-    right: auto;
-    left: 0;
+  right: auto;
+  left: 0;
 }
 
 *[dir="rtl"] .multiselect__clear {
-    right: auto;
-    left: 12px;
+  right: auto;
+  left: 12px;
 }
 
 *[dir="rtl"] .multiselect__spinner {
-    right: auto;
-    left: 1px;
+  right: auto;
+  left: 1px;
 }
 
 @keyframes spinning {
-  from { transform:rotate(0) }
-  to { transform:rotate(2turn) }
+  from {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(2turn);
+  }
 }
 </style>
